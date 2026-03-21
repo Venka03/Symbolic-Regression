@@ -2,6 +2,26 @@
 using Latexify
 using Random
 using StatsBase: sample
+using CSV
+using DataFrames
+
+function load_and_clean_csv(file_path::String)
+    # CSV.read is incredibly fast and automatically handles headers and missing data
+    df = CSV.read(file_path, DataFrame)
+    
+    # Instantly convert the clean DataFrame into a Float64 Matrix
+    return Matrix{Float64}(df)
+end
+
+function prepare_data(file_path::String)
+    data = load_and_clean_csv(file_path)
+    println("Loaded clean CSV data: ", size(data))
+
+    X = data[:, 1:end-1]
+    y = data[:, end]
+
+    return X, y
+end
 
 mutable struct Variable
     name::String
@@ -26,10 +46,10 @@ end
 
 function stringNode(node::TreeNode)
     if typeof(node.value) == Variable
-        return node.value.name
+        return "(" * node.value.name * ")"
     end
     if typeof(node.value) != Operation
-        return string(node.value)
+        return "(" * string(node.value) * ")"
     end
 
     op1 = stringNode(node.children[1])
@@ -157,17 +177,18 @@ function generateNode(variables::Vector{Variable}, depth::Int)
     if depth == 1
         TreeNode(generateNumber(variables), Vector{}())
     else
-      if rand() < 0.5
-          operation = generateOperation()
-          node = TreeNode(operation, Vector{}())
-          child1 = generateNode(variables, depth-1)
-          node.children = [child1]
-          if operation.name in ["+", "-", "*", "/"]
-              push!(node.children, generateNode(variables, depth-1))
-          end
-          return node
-      else
-          TreeNode(generateNumber(variables), Vector{}())
+        randNum = rand()
+        if randNum < 0.5
+            operation = generateOperation()
+            node = TreeNode(operation, Vector{}())
+            child1 = generateNode(variables, depth-1)
+            node.children = [child1]
+            if operation.name in ["+", "-", "*", "/"]
+                push!(node.children, generateNode(variables, depth-1))
+            end
+            return node
+        else
+            TreeNode(generateNumber(variables), Vector{}())
       end
     end
 end
@@ -178,15 +199,7 @@ function generateTree(depth::Int, numVariables::Int)
     return Tree(head, variables)
 end
 
-var = Variable("x", 5)
-a = TreeNode(2.0, Vector{}())
-d = TreeNode(var, Vector{}())
-e = TreeNode(Operation("*"), [a, d])
-c = TreeNode(4.0, Vector{}())
-b = TreeNode(Operation("+"), [e, c])
-f = TreeNode(Operation("sqrt"), [b])
+tree = generateTree(5, 1)
 
-tree = Tree(f, var)
-
-printBeatifulTree(tree)
+println(stringTree(tree))
 println(computeTree(tree))
