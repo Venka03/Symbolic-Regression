@@ -19,7 +19,7 @@ end
 
 mutable struct Tree
     head::TreeNode
-    variable::Variable
+    variable::Vector{Variable}
 end
 
 function stringNode(node::TreeNode)
