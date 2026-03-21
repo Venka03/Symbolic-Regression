@@ -1,5 +1,7 @@
-# import Pkg; Pkg.add("Latexify")  # for first time run
+# import Pkg; Pkg.add("Latexify"); Pkg.add("StatsBase")  # for first time run
 using Latexify
+using Random
+using StatsBase: sample
 
 mutable struct Variable
     name::String
@@ -101,6 +103,79 @@ end
 
 function computeTree(tree::Tree)
     computeNode(tree.head)
+end
+
+function generateOperation()
+    randNum = rand()
+    if randNum < 1/8
+        Operation("sqrt")
+    elseif randNum < 1/4
+        Operation("log")
+    elseif randNum < 3/8
+        Operation("floor")
+    elseif randNum < 1/2
+        Operation("ceil")
+    elseif randNum < 5/8
+        Operation("+")
+    elseif randNum < 3/4
+        Operation("-")
+    elseif randNum < 7/8
+        Operation("*")
+    else
+        Operation("/")
+    end
+end
+
+function generateNumber(variables::Vector{Variable})
+    randNum = rand()
+    if randNum < 1/3  # generate float from 0 to 10
+        10*rand()
+    elseif randNum < 2/3  # generate int from 0 to 10
+        float(rand(0:10))
+    else
+        rand(variables)  # take randomly variable
+    end
+end
+
+function generateVariables(num::Int)
+    alphabet = "abcdefghijklmnopqrtsuvwxyz"
+    alphabetVector = Vector{}()
+    for el in alphabet
+        push!(alphabetVector, string(el))
+    end
+    variableNames = sample(alphabetVector, num, replace=false)
+
+    variables = Vector{Variable}()
+
+    for name in variableNames
+        push!(variables, Variable(name, 0))  # make 0 value as default
+    end
+    return variables
+end
+
+function generateNode(variables::Vector{Variable}, depth::Int)
+    if depth == 1
+        TreeNode(generateNumber(variables), Vector{}())
+    else
+      if rand() < 0.5
+          operation = generateOperation()
+          node = TreeNode(operation, Vector{}())
+          child1 = generateNode(variables, depth-1)
+          node.children = [child1]
+          if operation.name in ["+", "-", "*", "/"]
+              push!(node.children, generateNode(variables, depth-1))
+          end
+          return node
+      else
+          TreeNode(generateNumber(variables), Vector{}())
+      end
+    end
+end
+
+function generateTree(depth::Int, numVariables::Int)
+    variables = generateVariables(numVariables)
+    head = generateNode(variables, depth)
+    return Tree(head, variables)
 end
 
 var = Variable("x", 5)
