@@ -1,4 +1,4 @@
-# import Pkg; Pkg.add("Latexify"); Pkg.add("StatsBase")  # for first time run
+# import Pkg; Pkg.add("Latexify"); Pkg.add("StatsBase"); Pkg.add("CSV"); Pkg.add("DataFrames")  # for first time run
 using Latexify
 using Random
 using StatsBase: sample
@@ -41,7 +41,7 @@ end
 
 mutable struct Tree
     head::TreeNode
-    variable::Vector{Variable}
+    variables::Vector{Variable}
 end
 
 function stringNode(node::TreeNode)
@@ -199,7 +199,31 @@ function generateTree(depth::Int, numVariables::Int)
     return Tree(head, variables)
 end
 
-tree = generateTree(5, 1)
+function assignValues!(variables::Vector{Variable}, values::Vector{Float64})
+    if length(variables) != length(values)
+        throw("amount of values should be same as of variables")
+    end
+    for i in 1:length(variables)
+        variables[i].value = values[i]
+    end
+end
+
+function computeFitness(tree::Tree, X::Matrix{Float64}, y::Vector{Float64})
+    fitness = 0
+    try
+        for i in 1:X.size[1]
+            assignValues!(tree.variables, X[i, :])
+            fitness += computeTree(tree) - y[i]
+        end
+    catch e
+        fitness = Inf
+    end
+    return abs(fitness)
+end
+
+X, y = prepare_data("pi.csv")
+
+tree = generateTree(10, 1)
 
 println(stringTree(tree))
-println(computeTree(tree))
+println(computeFitness(tree, X, y))
