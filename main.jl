@@ -59,6 +59,10 @@ function performOperation(operation::Operation, operand1::Float64, operand2=noth
             throw("log zero")
         end
         log(operand1)
+    elseif operation.name == "floor"
+        floor(operand1)
+    elseif operation.name == "ceil"
+        ceil(operand1)
     elseif operand2 != nothing
         if operation.name == "+"
             operand1 + operand2
