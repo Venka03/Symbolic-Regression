@@ -42,7 +42,16 @@ end
 mutable struct Tree
     head::TreeNode
     variables::Vector{Variable}
+    fitness::Float64
 end
+
+Base.isless(a::Tree, b::Tree) = a.fitness < b.fitness
+
+mutable struct Population
+    individuals::Vector{Tree}
+    size::Int
+end
+
 
 function stringNode(node::TreeNode)
     if typeof(node.value) == Variable
@@ -193,10 +202,10 @@ function generateNode(variables::Vector{Variable}, depth::Int)
     end
 end
 
-function generateTree(depth::Int, numVariables::Int)
+function Tree(depth::Int, numVariables::Int, full::Bool)
     variables = generateVariables(numVariables)
-    head = generateNode(variables, depth)
-    return Tree(head, variables)
+    head = generateNode(variables, depth, full)
+    return Tree(head, variables, 0)
 end
 
 function assignValues!(variables::Vector{Variable}, values::Vector{Float64})
@@ -208,7 +217,7 @@ function assignValues!(variables::Vector{Variable}, values::Vector{Float64})
     end
 end
 
-function computeFitness(tree::Tree, X::Matrix{Float64}, y::Vector{Float64})
+function computeFitness!(tree::Tree, X::Matrix{Float64}, y::Vector{Float64})
     fitness = 0
     try
         for i in 1:X.size[1]
@@ -218,12 +227,54 @@ function computeFitness(tree::Tree, X::Matrix{Float64}, y::Vector{Float64})
     catch e
         fitness = Inf
     end
-    return abs(fitness)
+    tree.fitness = abs(fitness)
+end
+
+function Population(size::Int, numVariables::Int)
+    population = Population(Vector{}(), size)
+    for i in 1:size
+        randNum = rand()
+        if randNum < 0.1
+            push!(population.individuals, Tree(3, numVariables, true))
+        elseif randNum < 0.2
+            push!(population.individuals, Tree(4, numVariables, true))
+        elseif randNum < 0.3
+            push!(population.individuals, Tree(5, numVariables, true))
+        elseif randNum < 0.4
+            push!(population.individuals, Tree(6, numVariables, true))
+        elseif randNum < 0.5
+            push!(population.individuals, Tree(7, numVariables, true))
+        elseif randNum < 0.6
+            push!(population.individuals, Tree(3, numVariables, false))
+        elseif randNum < 0.7
+            push!(population.individuals, Tree(4, numVariables, false))
+        elseif randNum < 0.8
+            push!(population.individuals, Tree(5, numVariables, false))
+        elseif randNum < 0.9
+            push!(population.individuals, Tree(6, numVariables, false))
+        else
+            push!(population.individuals, Tree(7, numVariables, false))
+        end
+    end
+    return population
+end
+
+function computePopulationFitness!(population::Population, X::Matrix{Float64},
+                                                          y::Vector{Float64})
+    for tree in population.individuals
+        computeFitness!(tree, X, y)
+    end
+end
+
+function best(population::Population)
+    minimum(population.individuals)
 end
 
 X, y = prepare_data("pi.csv")
 
-tree = generateTree(10, 1)
+population = Population(100, 1)
+computePopulationFitness!(population, X, y)
+bestTree = best(population)
 
-println(stringTree(tree))
-println(computeFitness(tree, X, y))
+println(stringTree(bestTree))
+println(computeFitness(bestTree, X, y))
