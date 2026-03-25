@@ -270,6 +270,21 @@ function best(population::Population)
     minimum(population.individuals)
 end
 
+function getAllNodeDescendants!(node::TreeNode, allNodes::Vector{TreeNode})
+    if typeof(node.value) == Operation
+        getAllNodeDescendants!(node.children[1], allNodes)
+        if length(node.children) == 2
+            getAllNodeDescendants!(node.children[2], allNodes)
+        end
+    end
+    push!(allNodes, node)
+end
+
+function getAllTreeNodes(tree::Tree)
+    allNodes = Vector{TreeNode}()
+    getAllNodeDescendants!(tree.head, allNodes)
+end
+
 X, y = prepare_data("pi.csv")
 
 population = Population(100, 1)
