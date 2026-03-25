@@ -285,6 +285,24 @@ function getAllTreeNodes(tree::Tree)
     getAllNodeDescendants!(tree.head, allNodes)
 end
 
+function mutate!(tree::Tree)
+    randNum = rand()
+    allNodes = getAllTreeNodes(tree)
+    if randNum < 1/3
+        node = rand(filter(x -> x.value isa Operation, allNodes))
+        node.value = generateOperation()
+    elseif randNum < 2/3
+        node = rand(filter(x -> x.value isa Variable 
+                              || x.value isa Float64, allNodes))
+        node.value = generateNumber(tree.variables)
+    else
+        node = rand(allNodes)
+        minDepth = rand(0:1)
+        node = generateNode(tree.variables, minDepth, 
+                                      rand(minDepth:4), rand(Bool))
+    end
+end
+
 X, y = prepare_data("pi.csv")
 
 population = Population(100, 1)
