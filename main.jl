@@ -303,6 +303,45 @@ function mutate!(tree::Tree)
     end
 end
 
+function getParent(treeNodes::Vector{TreeNode}, child::TreeNode)
+    for node in treeNodes
+        if child in node.children
+            return (node, findfirst(==(child), node.children))
+        end
+    end
+    return (nothing, nothing)
+end
+
+function crossover!(tree1::Tree, tree2::Tree)
+    allNodesTree1 = getAllTreeNodes(tree1)
+    allNodesTree2 = getAllTreeNodes(tree2)
+
+    crossoverNode1 = rand(allNodesTree1)
+    crossoverNode2 = rand(allNodesTree2)
+
+    parent1, idx1 = getParent(allNodesTree1, crossoverNode1)
+    parent2, idx2 = getParent(allNodesTree2, crossoverNode2)
+
+    if isnothing(parent1) && crossoverNode1 != tree1.head ||
+        isnothing(parent2) && crossoverNode2 != tree2.head
+        throw("Error: Node without parent")
+    end
+
+    if crossoverNode1 == tree1.head && crossoverNode2 == tree2.head
+        tree1.head = crossoverNode2
+        tree2.head = crossoverNode1
+    elseif crossoverNode1 == tree1.head
+        tree1.head = crossoverNode2
+        parent2.children[idx2] = crossoverNode1
+    elseif crossoverNode2 == tree2.head
+        tree2.head = crossoverNode1
+        parent1.children[idx1] = crossoverNode2
+    else
+        parent1.children[idx1] = crossoverNode2
+        parent2.children[idx2] = crossoverNode1
+    end
+end
+
 X, y = prepare_data("pi.csv")
 
 population = Population(100, 1)
