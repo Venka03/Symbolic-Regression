@@ -167,12 +167,12 @@ function generateNumber(variables::Vector{Variable})
 end
 
 function generateVariables(num::Int)
-    alphabet = "abcdefghijklmnopqrtsuvwxyz"
+    alphabet = "xyznkmuvwabcdefghijpqrtslo"
     alphabetVector = Vector{}()
     for el in alphabet
         push!(alphabetVector, string(el))
     end
-    variableNames = sample(alphabetVector, num, replace=false)
+    variableNames = alphabetVector[1:num]
 
     variables = Vector{Variable}()
 
