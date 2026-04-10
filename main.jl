@@ -28,6 +28,8 @@ mutable struct Variable
     value::Float64
 end
 
+Base.show(io::IO, var::Variable) = print(io, var.name)
+
 mutable struct Operation
     name::String
 end
@@ -74,7 +76,7 @@ function stringTree(tree::Tree)
     stringNode(tree.head)
 end
 
-function printBeatifulTree(tree::Tree)
+function printBeautifulTree(tree::Tree)
     string_tree = stringTree(tree)
     # Convert the string into a mathematical expression
     expressionTree = Meta.parse(string_tree)
@@ -94,7 +96,7 @@ function performOperation(operation::Operation, operand1::Float64, operand2=noth
         floor(operand1)
     elseif operation.name == "ceil"
         ceil(operand1)
-    elseif operand2 != nothing
+    elseif operand2 !== nothing
         if operation.name == "+"
             operand1 + operand2
         elseif operation.name == "-"
@@ -157,9 +159,9 @@ end
 
 function generateNumber(variables::Vector{Variable})
     randNum = rand()
-    if randNum < 1/3  # generate float from 0 to 10
+    if randNum < 1/4  # generate float from 0 to 10
         10*rand()
-    elseif randNum < 2/3  # generate int from 0 to 10
+    elseif randNum < 1/2  # generate int from 0 to 10
         float(rand(0:10))
     else
         rand(variables)  # take randomly variable
@@ -182,29 +184,31 @@ function generateVariables(num::Int)
     return variables
 end
 
-function generateNode(variables::Vector{Variable}, depth::Int)
-    if depth == 1
+function generateNode(variables::Vector{Variable}, minDepth::Int,
+                                                  depth::Int, full::Bool)
+    if depth == 0
         TreeNode(generateNumber(variables), Vector{}())
     else
-        randNum = rand()
-        if randNum < 0.5
-            operation = generateOperation()
-            node = TreeNode(operation, Vector{}())
-            child1 = generateNode(variables, depth-1)
-            node.children = [child1]
-            if operation.name in ["+", "-", "*", "/"]
-                push!(node.children, generateNode(variables, depth-1))
-            end
-            return node
-        else
-            TreeNode(generateNumber(variables), Vector{}())
+      if rand() < 0.5 || full || minDepth > 0
+          operation = generateOperation()
+          node = TreeNode(operation, Vector{}())
+          child1 = generateNode(variables, minDepth-1, depth-1, full)
+          node.children = [child1]
+          if operation.name in ["+", "-", "*", "/"]
+              push!(node.children, generateNode(variables, minDepth-1,
+                                                        depth-1, full))
+          end
+          return node
+      else
+          TreeNode(generateNumber(variables), Vector{}())
       end
     end
 end
 
 function Tree(depth::Int, numVariables::Int, full::Bool)
     variables = generateVariables(numVariables)
-    head = generateNode(variables, depth, full)
+    minDepth = 3
+    head = generateNode(variables, minDepth, depth, full)
     return Tree(head, variables, 0)
 end
 
@@ -218,16 +222,19 @@ function assignValues!(variables::Vector{Variable}, values::Vector{Float64})
 end
 
 function computeFitness!(tree::Tree, X::Matrix{Float64}, y::Vector{Float64})
-    fitness = 0
+    squared_errors_sum = 0.0
+    fitness = Inf
     try
         for i in 1:X.size[1]
             assignValues!(tree.variables, X[i, :])
-            fitness += computeTree(tree) - y[i]
+            prediction = computeTree(tree)
+            squared_errors_sum += (prediction - y[i])^2
         end
+        fitness = squared_errors_sum / X.size[1]
     catch e
         fitness = Inf
     end
-    tree.fitness = abs(fitness)
+    tree.fitness = fitness
 end
 
 function Population(size::Int, numVariables::Int)
@@ -285,22 +292,42 @@ function getAllTreeNodes(tree::Tree)
     getAllNodeDescendants!(tree.head, allNodes)
 end
 
-function mutate!(tree::Tree)
-    randNum = rand()
-    allNodes = getAllTreeNodes(tree)
-    if randNum < 1/3
-        node = rand(filter(x -> x.value isa Operation, allNodes))
-        node.value = generateOperation()
-    elseif randNum < 2/3
-        node = rand(filter(x -> x.value isa Variable 
-                              || x.value isa Float64, allNodes))
-        node.value = generateNumber(tree.variables)
-    else
-        node = rand(allNodes)
-        minDepth = rand(0:1)
-        node = generateNode(tree.variables, minDepth, 
-                                      rand(minDepth:4), rand(Bool))
-    end
+function mutation!(tree::Tree, maximumDepth::Int)
+      randNum = rand()
+      allNodes = getAllTreeNodes(tree)
+
+      if isempty(allNodes)
+          return # Cannot mutate an empty tree
+      end
+
+      if randNum < 1/3
+          operations = filter(x -> x.value isa Operation, allNodes)
+          if !isempty(operations)
+              node = rand(operations)
+              node.value = generateOperation()
+          else
+              # Fallback to the following mutation option
+              randNum += 1/3
+          end
+      end
+      if randNum < 2/3
+          terminals = filter(x -> x.value isa Variable || x.value isa Float64, allNodes)
+          if !isempty(terminals)
+              node = rand(terminals)
+              node.value = generateNumber(tree.variables)
+          else
+              # Fallback to the following mutation option
+              randNum += 1/3
+          end
+      end
+      if randNum >= 2/3
+          node = rand(allNodes)
+          height = getNodeHeight(node)
+          minDepth = rand(0:max(0, min(1, height)))
+          new_branch = generateNode(tree.variables, minDepth, rand(minDepth:min(4, height)), rand(Bool))
+          node.value = new_branch.value
+          node.children = new_branch.children
+      end
 end
 
 function getParent(treeNodes::Vector{TreeNode}, child::TreeNode)
@@ -312,12 +339,58 @@ function getParent(treeNodes::Vector{TreeNode}, child::TreeNode)
     return (nothing, nothing)
 end
 
-function crossover!(tree1::Tree, tree2::Tree)
+function getNodeDepth(target_node::TreeNode, current_head::TreeNode)
+    if target_node === current_head
+        return 0
+    end
+
+    if isempty(current_head.children)
+        return Inf # Represents 'not found' in this path
+    end
+
+    for child in current_head.children
+        child_depth = getNodeDepth(target_node, child)
+        if child_depth != Inf
+            return 1 + child_depth
+        end
+    end
+
+    return Inf
+end
+
+function getNodeDepth(node::TreeNode, tree::Tree)
+    getNodeDepth(node, tree.head)
+end
+
+function getNodeHeight(node::TreeNode)
+    if isempty(node.children)
+        0
+    elseif length(node.children) == 1
+        1 + getNodeHeight(node.children[1])
+    else 
+        1 + max(getNodeHeight(node.children[1]), getNodeHeight(node.children[2]))
+    end
+end
+
+function crossover!(tree1::Tree, tree2::Tree, maximumDepth::Int)
     allNodesTree1 = getAllTreeNodes(tree1)
     allNodesTree2 = getAllTreeNodes(tree2)
 
-    crossoverNode1 = rand(allNodesTree1)
-    crossoverNode2 = rand(allNodesTree2)
+    properDepths = false
+    crossoverNode1 = nothing
+    crossoverNode2 = nothing
+
+    while !properDepths
+        crossoverNode1 = rand(allNodesTree1)
+        crossoverNode2 = rand(allNodesTree2)
+
+        height1 = getNodeHeight(crossoverNode1)
+        height2 = getNodeHeight(crossoverNode2)
+
+        # so we stay it permitted depth
+        properDepths = (height1 + getNodeDepth(crossoverNode2, tree2) <= maximumDepth 
+                    &&  height2 + getNodeDepth(crossoverNode1, tree1) <= maximumDepth)
+    end
 
     parent1, idx1 = getParent(allNodesTree1, crossoverNode1)
     parent2, idx2 = getParent(allNodesTree2, crossoverNode2)
@@ -341,6 +414,12 @@ function crossover!(tree1::Tree, tree2::Tree)
         parent2.children[idx2] = crossoverNode1
     end
 end
+
+function tournament(tree1::Tree, tree2::Tree, tree3::Tree)
+    minimum(tree1, tree2, tree3)
+end
+
+
 
 X, y = prepare_data("pi.csv")
 
