@@ -415,17 +415,111 @@ function crossover!(tree1::Tree, tree2::Tree, maximumDepth::Int)
     end
 end
 
-function tournament(tree1::Tree, tree2::Tree, tree3::Tree)
-    minimum(tree1, tree2, tree3)
+function tournament_selection(population::Population)
+    ind1, ind2, ind3 = sample(population.individuals, 3, replace=false)
+    min(ind1, ind2, ind3)
 end
 
+function build_wheel(population::Population)
+    fitnesses = [ind.fitness for ind in population.individuals]
+    inverted  = 1.0 ./ (fitnesses .+ 1e-6)
+    probs     = inverted ./ sum(inverted)
+    return cumsum(probs)
+end
 
+function roulette_spin(population::Population, wheel::Vector{Float64})
+    idx = min(searchsortedfirst(wheel, rand()), length(population.individuals))
+    return population.individuals[idx]
+end
+
+function run_selection(population::Population, selection_method::Symbol,
+ X::Matrix{Float64}, y::Vector{Float64}, generations::Int, maximumDepth::Int,
+ mutation_rate::Float64=0.25, crossover_rate::Float64=0.5)
+    best_fitness_hist = Float64[]
+
+    # Initial fitness calculation
+    computePopulationFitness!(population, X, y)
+
+    for i in 0:generations
+        # Save the absolute best before any changes
+        best_ind = deepcopy(best(population))
+        current_fitness = best_ind.fitness
+        push!(best_fitness_hist, current_fitness)
+        println("Generation $i. Best Fitness: $current_fitness")
+
+        new_individuals = Vector{Tree}()
+
+        if selection_method == :roulette
+            wheel = build_wheel(population)
+            select = () -> roulette_spin(population, wheel)
+        elseif selection_method == :tournament
+            select = () -> tournament_selection(population)
+        else
+            throw(ArgumentError("Unknown selection method: $selection_method"))
+        end
+
+        while length(new_individuals) < population.size
+            randNum = rand()
+            if randNum < crossover_rate
+                # Crossover
+                parent1 = select()
+                parent2 = select()
+
+                child1 = deepcopy(parent1)
+                child2 = deepcopy(parent2)
+                crossover!(child1, child2, maximumDepth)
+
+                push!(new_individuals, child1)
+                # Only push another if we have not exceeded population size
+                if length(new_individuals) < population.size 
+                    push!(new_individuals, child2)
+                end
+            elseif randNum < crossover_rate + mutation_rate
+                # Mutation
+                parent = select()
+                child = deepcopy(parent)
+                mutation!(child, maximumDepth)
+                push!(new_individuals, child)
+            else
+                # Reproduction
+                parent = select()
+                child = deepcopy(parent)
+                push!(new_individuals, child)
+            end
+        end
+
+        # Re-evaluate New Generation
+        population.individuals = new_individuals
+        computePopulationFitness!(population, X, y)
+    end
+
+    return (best_fitness_hist, best(population))
+end
 
 X, y = prepare_data("pi.csv")
 
-population = Population(100, 1)
-computePopulationFitness!(population, X, y)
-bestTree = best(population)
+individual_size = size(X, 2)
+population_roulette = Population(150, individual_size)
+population_tournament = deepcopy(population_roulette)  # to have the same initial population
 
-println(stringTree(bestTree))
-println(computeFitness(bestTree, X, y))
+generations = 35
+mutation_rate = 0.25
+crossover_rate = 0.5
+maximum_depth = 15
+
+println("Tournament")
+start_time = time_ns()
+tournament_hist, best_tree = run_selection(population_tournament, :tournament,
+                 X, y, generations, maximum_depth, mutation_rate, crossover_rate)
+elapsed = (time_ns() - start_time) / 1e9
+println("Tournament's total time: ", round(elapsed, digits=2), " seconds")
+printBeautifulTree(best_tree)
+
+
+println("Roulette")
+start_time = time_ns()
+roulette_hist, best_roulette = run_selection(population_roulette, :roulette,
+                 X, y, generations, maximum_depth, mutation_rate, crossover_rate)
+elapsed = (time_ns() - start_time) / 1e9
+println("Roulette's total time: ", round(elapsed, digits=2), " seconds")
+printBeautifulTree(best_roulette)
