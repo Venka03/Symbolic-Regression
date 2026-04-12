@@ -6,6 +6,7 @@ using CSV
 using DataFrames
 using Plots
 using Statistics
+using DelimitedFiles
 
 function load_and_clean_csv(file_path::String)
     # CSV.read is incredibly fast and automatically handles headers and missing data
@@ -285,45 +286,68 @@ function getAllTreeNodes(tree::Tree)
 end
 
 function mutation!(tree::Tree, maximumDepth::Int)
-      randNum = rand()
-      allNodes = getAllTreeNodes(tree)
+    randNum = rand()
+    allNodes = getAllTreeNodes(tree)
 
-      if isempty(allNodes)
-          return # Cannot mutate an empty tree
-      end
+    if tree.head === nothing || isempty(allNodes)
+        return # Cannot mutate an empty tree
+    end
 
-      if randNum < 1/3
-          operations = filter(x -> x.value isa Operation, allNodes)
-          if !isempty(operations)
-              node = rand(operations)
-              node.value = generateOperation()
-          else
-              # Fallback to the following mutation option
-              randNum += 1/3
-          end
-      end
-      if 1/3 <= randNum < 2/3
-          terminals = filter(x -> x.value isa Variable || x.value isa Float64, allNodes)
-          if !isempty(terminals)
-              node = rand(terminals)
-              node.value = generateNumber(tree.variables)
-          else
-              # Fallback to the following mutation option
-              randNum += 1/3
-          end
-      end
-      if randNum >= 2/3
-          if isempty(allNodes)
-              return
-          end
-          node = rand(allNodes)
-          depthPotential = maximumDepth - getNodeDepth(node, tree)
-          minDepth = rand(0:max(0, min(1, depthPotential)))
-          new_branch = generateNode(tree.variables, minDepth,
-                          rand(minDepth:min(4, depthPotential)), rand(Bool))
-          node.value = new_branch.value
-          node.children = new_branch.children
-      end
+    if randNum < 1/3
+        operations = filter(x -> x.value isa Operation, allNodes)
+        if !isempty(operations)
+            node = rand(operations)
+            old_arity = length(node.children)
+            
+            new_op = generateOperation()
+            new_arity = new_op.name in ["+", "-", "*", "/"] ? 2 : 1
+            
+            if new_arity < old_arity
+                keep_idx = rand(1:old_arity)
+                node.children = [node.children[keep_idx]]
+                
+            elseif new_arity > old_arity
+                # -1 because child is one level deeper
+                depthPotential = max(0, maximumDepth - getNodeDepth(node, tree) - 1)
+                minDepth = rand(0:max(0, min(1, depthPotential)))
+                new_child = generateNode(tree.variables, minDepth,
+                                rand(minDepth:min(4, depthPotential)), rand(Bool))
+                
+                if rand() < 0.5
+                    pushfirst!(node.children, new_child)
+                else
+                    push!(node.children, new_child)
+                end
+            end
+            
+            node.value = new_op
+        else
+            # Fallback to the following mutation option
+            randNum += 1/3
+        end
+    end
+    if 1/3 <= randNum < 2/3
+        terminals = filter(x -> x.value isa Variable || x.value isa Float64, allNodes)
+        if !isempty(terminals)
+            node = rand(terminals)
+            node.value = generateNumber(tree.variables)
+        else
+            # Fallback to the following mutation option
+            randNum += 1/3
+        end
+    end
+    if randNum >= 2/3
+        if isempty(allNodes)
+            return
+        end
+        node = rand(allNodes)
+        depthPotential = max(0, maximumDepth - getNodeDepth(node, tree))
+        minDepth = rand(0:max(0, min(1, depthPotential)))
+        new_branch = generateNode(tree.variables, minDepth,
+                        rand(minDepth:min(4, depthPotential)), rand(Bool))
+        node.value = new_branch.value
+        node.children = new_branch.children
+    end
 end
 
 function getParent(treeNodes::Vector{TreeNode}, child::TreeNode)
@@ -489,7 +513,6 @@ function run_selection(population::Population, selection_method::Symbol, printab
 
     for i in 0:generations
 
-        # 1. EXTRACT ELITES (Using Raw Fitness)
         sorted = sort(population.individuals, by = x -> x.fitness)
         elites = [deepcopy(ind) for ind in sorted[1:elite_count]]
 
@@ -502,13 +525,11 @@ function run_selection(population::Population, selection_method::Symbol, printab
         end
 
         if niche
-            # 2. APPLY FITNESS SHARING (Penalizes the .fitness values)
             sigma_share = compute_sigma_share(population)
             apply_fitness_sharing!(population, sigma_share, 1.0)
         end
 
 
-        # 3. SETUP SELECTION (Using the new Penalized Fitness)
         if selection_method == :roulette
             wheel = build_wheel(population)
             select = () -> roulette_spin(population, wheel)
@@ -519,7 +540,6 @@ function run_selection(population::Population, selection_method::Symbol, printab
         end
 
 
-        # 4. GENERATE NEW POPULATION
         new_individuals = Vector{Tree}()
 
         while length(new_individuals) < population.size - elite_count
@@ -552,7 +572,6 @@ function run_selection(population::Population, selection_method::Symbol, printab
             end
         end
 
-        # Re-evaluate New Generation
         # Elites go in unconditionally
         population.individuals = [elites; new_individuals]
         computePopulationFitness!(population, X, y)
@@ -581,7 +600,7 @@ function runSymbolicRegression(population::Population, X::Matrix{Float64}, y::Ve
     if printable
         println(name * "'s total time: ", round(elapsed, digits=2), " seconds")
         printBeautifulTree(best_tree)
-        println("Heigh of tree:", getNodeHeight(best_tree.head))
+        println("Heigh of tree: ", getNodeHeight(best_tree.head))
     end
     return (history, best_tree, elapsed)
 end
@@ -690,6 +709,11 @@ function doIterations(fileName, generations, populationSize, iterations, printab
     fitness_hist_tournament_niche /= iterations
     fitness_hist_roulette_niche /= iterations
 
+    writedlm(fileName * "fitness_hist_tournament.txt", fitness_hist_tournament)
+    writedlm(fileName * "fitness_hist_roulette.txt", fitness_hist_roulette)
+    writedlm(fileName * "fitness_hist_tournament_niche.txt", fitness_hist_tournament_niche)
+    writedlm(fileName * "fitness_hist_roulette_niche.txt", fitness_hist_roulette_niche)
+
     avg_tournament_time /= iterations
     avg_roulette_time /= iterations
     avg_tournament_niche_time /= iterations
@@ -736,7 +760,7 @@ end
 
 function main()
     start_time = time_ns()
-    doIterations("pi.csv", 35, 150, 10, false)
+    doIterations("eul.csv", 35, 150, 10, false)
     elapsed = (time_ns() - start_time) / 1e9
     println("Total execution time: ", round(elapsed, digits=2), " seconds")
 end
