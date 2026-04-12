@@ -252,18 +252,7 @@ end
 function Population(size::Int, numVariables::Int)
     population = Population(Vector{Tree}(), size)
     for _ in 1:size
-        randNum = rand()
-        if randNum < 0.2
-            push!(population.individuals, Tree(3, numVariables, rand(Bool)))
-        elseif randNum < 0.4
-            push!(population.individuals, Tree(4, numVariables, rand(Bool)))
-        elseif randNum < 0.6
-            push!(population.individuals, Tree(5, numVariables, rand(Bool)))
-        elseif randNum < 0.8
-            push!(population.individuals, Tree(6, numVariables, rand(Bool)))
-        else
-            push!(population.individuals, Tree(7, numVariables, rand(Bool)))
-        end
+        push!(population.individuals, Tree(rand(3:7), numVariables, rand(Bool)))
     end
     return population
 end
