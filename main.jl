@@ -4,11 +4,13 @@ using Random
 using StatsBase: sample
 using CSV
 using DataFrames
+using Plots
+using Statistics
 
 function load_and_clean_csv(file_path::String)
     # CSV.read is incredibly fast and automatically handles headers and missing data
     df = CSV.read(file_path, DataFrame)
-    
+
     # Instantly convert the clean DataFrame into a Float64 Matrix
     return Matrix{Float64}(df)
 end
@@ -45,6 +47,7 @@ mutable struct Tree
     head::TreeNode
     variables::Vector{Variable}
     fitness::Float64
+    predictions::Vector{Float64}
 end
 
 Base.isless(a::Tree, b::Tree) = a.fitness < b.fitness
@@ -86,12 +89,15 @@ end
 
 function performOperation(operation::Operation, operand1::Float64, operand2=nothing)
     if operation.name == "sqrt"
-        sqrt(operand1)
+        operand1 < 0 ? throw(DomainError(operand1)) : sqrt(operand1)
     elseif operation.name == "log"
-        if operand1 == 0
-            throw("log zero")
-        end
-        log(operand1)
+        operand1 <= 0 ? throw(DomainError(operand1)) : log(operand1)
+    elseif operation.name == "sin"
+        sin(operand1)
+    elseif operation.name == "cos"
+        cos(operand1)
+    elseif operation.name == "abs"
+        abs(operand1)   
     elseif operation.name == "floor"
         floor(operand1)
     elseif operation.name == "ceil"
@@ -104,10 +110,7 @@ function performOperation(operation::Operation, operand1::Float64, operand2=noth
         elseif operation.name == "*"
             operand1 * operand2
         elseif operation.name == "/"
-            if operand2 == 0
-                throw("Division by zero")
-            end
-            operand1 / operand2
+            operand1 == 0 ? throw(DivideError()) : operand1 / operand2
         end
     else
         # catch error and make fitness be infinity
@@ -138,19 +141,25 @@ end
 
 function generateOperation()
     randNum = rand()
-    if randNum < 1/8
+    if randNum < 1/11
         Operation("sqrt")
-    elseif randNum < 1/4
+    elseif randNum < 2/11
         Operation("log")
-    elseif randNum < 3/8
+    elseif randNum < 3/11
+        Operation("sin")
+    elseif randNum < 4/11
+        Operation("cos")
+    elseif randNum < 5/11
+        Operation("abs")
+    elseif randNum < 6/11
         Operation("floor")
-    elseif randNum < 1/2
+    elseif randNum < 7/11
         Operation("ceil")
-    elseif randNum < 5/8
+    elseif randNum < 8/11
         Operation("+")
-    elseif randNum < 3/4
+    elseif randNum < 9/11
         Operation("-")
-    elseif randNum < 7/8
+    elseif randNum < 10/11
         Operation("*")
     else
         Operation("/")
@@ -187,11 +196,11 @@ end
 function generateNode(variables::Vector{Variable}, minDepth::Int,
                                                   depth::Int, full::Bool)
     if depth == 0
-        TreeNode(generateNumber(variables), Vector{}())
+        TreeNode(generateNumber(variables), Vector{TreeNode}())
     else
       if rand() < 0.5 || full || minDepth > 0
           operation = generateOperation()
-          node = TreeNode(operation, Vector{}())
+          node = TreeNode(operation, Vector{TreeNode}())
           child1 = generateNode(variables, minDepth-1, depth-1, full)
           node.children = [child1]
           if operation.name in ["+", "-", "*", "/"]
@@ -200,16 +209,16 @@ function generateNode(variables::Vector{Variable}, minDepth::Int,
           end
           return node
       else
-          TreeNode(generateNumber(variables), Vector{}())
+          TreeNode(generateNumber(variables), Vector{TreeNode}())
       end
     end
 end
 
 function Tree(depth::Int, numVariables::Int, full::Bool)
     variables = generateVariables(numVariables)
-    minDepth = 3
+    minDepth = 2
     head = generateNode(variables, minDepth, depth, full)
-    return Tree(head, variables, 0)
+    return Tree(head, variables, 0.0, Float64[])
 end
 
 function assignValues!(variables::Vector{Variable}, values::Vector{Float64})
@@ -222,15 +231,18 @@ function assignValues!(variables::Vector{Variable}, values::Vector{Float64})
 end
 
 function computeFitness!(tree::Tree, X::Matrix{Float64}, y::Vector{Float64})
-    squared_errors_sum = 0.0
-    fitness = Inf
+    fitness = 0.0
+    num_rows = size(X, 1)
+    tree.predictions = zeros(Float64, num_rows)
+
     try
-        for i in 1:X.size[1]
+        for i in 1:num_rows
             assignValues!(tree.variables, X[i, :])
             prediction = computeTree(tree)
-            squared_errors_sum += (prediction - y[i])^2
+
+            tree.predictions[i] = prediction
+            fitness += abs(prediction - y[i])
         end
-        fitness = squared_errors_sum / X.size[1]
     catch e
         fitness = Inf
     end
@@ -238,29 +250,19 @@ function computeFitness!(tree::Tree, X::Matrix{Float64}, y::Vector{Float64})
 end
 
 function Population(size::Int, numVariables::Int)
-    population = Population(Vector{}(), size)
-    for i in 1:size
+    population = Population(Vector{Tree}(), size)
+    for _ in 1:size
         randNum = rand()
-        if randNum < 0.1
-            push!(population.individuals, Tree(3, numVariables, true))
-        elseif randNum < 0.2
-            push!(population.individuals, Tree(4, numVariables, true))
-        elseif randNum < 0.3
-            push!(population.individuals, Tree(5, numVariables, true))
+        if randNum < 0.2
+            push!(population.individuals, Tree(3, numVariables, rand(Bool)))
         elseif randNum < 0.4
-            push!(population.individuals, Tree(6, numVariables, true))
-        elseif randNum < 0.5
-            push!(population.individuals, Tree(7, numVariables, true))
+            push!(population.individuals, Tree(4, numVariables, rand(Bool)))
         elseif randNum < 0.6
-            push!(population.individuals, Tree(3, numVariables, false))
-        elseif randNum < 0.7
-            push!(population.individuals, Tree(4, numVariables, false))
+            push!(population.individuals, Tree(5, numVariables, rand(Bool)))
         elseif randNum < 0.8
-            push!(population.individuals, Tree(5, numVariables, false))
-        elseif randNum < 0.9
-            push!(population.individuals, Tree(6, numVariables, false))
+            push!(population.individuals, Tree(6, numVariables, rand(Bool)))
         else
-            push!(population.individuals, Tree(7, numVariables, false))
+            push!(population.individuals, Tree(7, numVariables, rand(Bool)))
         end
     end
     return population
@@ -290,6 +292,7 @@ end
 function getAllTreeNodes(tree::Tree)
     allNodes = Vector{TreeNode}()
     getAllNodeDescendants!(tree.head, allNodes)
+    return allNodes
 end
 
 function mutation!(tree::Tree, maximumDepth::Int)
@@ -310,7 +313,7 @@ function mutation!(tree::Tree, maximumDepth::Int)
               randNum += 1/3
           end
       end
-      if randNum < 2/3
+      if 1/3 <= randNum < 2/3
           terminals = filter(x -> x.value isa Variable || x.value isa Float64, allNodes)
           if !isempty(terminals)
               node = rand(terminals)
@@ -322,9 +325,10 @@ function mutation!(tree::Tree, maximumDepth::Int)
       end
       if randNum >= 2/3
           node = rand(allNodes)
-          height = getNodeHeight(node)
-          minDepth = rand(0:max(0, min(1, height)))
-          new_branch = generateNode(tree.variables, minDepth, rand(minDepth:min(4, height)), rand(Bool))
+          depthPotential = maximumDepth - getNodeDepth(node, tree)
+          minDepth = rand(0:max(0, min(1, depthPotential)))
+          new_branch = generateNode(tree.variables, minDepth,
+                          rand(minDepth:min(4, depthPotential)), rand(Bool))
           node.value = new_branch.value
           node.children = new_branch.children
       end
@@ -367,7 +371,7 @@ function getNodeHeight(node::TreeNode)
         0
     elseif length(node.children) == 1
         1 + getNodeHeight(node.children[1])
-    else 
+    else
         1 + max(getNodeHeight(node.children[1]), getNodeHeight(node.children[2]))
     end
 end
@@ -388,7 +392,7 @@ function crossover!(tree1::Tree, tree2::Tree, maximumDepth::Int)
         height2 = getNodeHeight(crossoverNode2)
 
         # so we stay it permitted depth
-        properDepths = (height1 + getNodeDepth(crossoverNode2, tree2) <= maximumDepth 
+        properDepths = (height1 + getNodeDepth(crossoverNode2, tree2) <= maximumDepth
                     &&  height2 + getNodeDepth(crossoverNode1, tree1) <= maximumDepth)
     end
 
@@ -496,30 +500,64 @@ function run_selection(population::Population, selection_method::Symbol,
     return (best_fitness_hist, best(population))
 end
 
-X, y = prepare_data("pi.csv")
+function main()
+    X, y = prepare_data("pi.csv")
 
-individual_size = size(X, 2)
-population_roulette = Population(150, individual_size)
-population_tournament = deepcopy(population_roulette)  # to have the same initial population
+    individual_size = size(X, 2)
+    population_roulette = Population(150, individual_size)
+    population_tournament = deepcopy(population_roulette)  # to have the same initial population
 
-generations = 35
-mutation_rate = 0.25
-crossover_rate = 0.5
-maximum_depth = 15
+    generations = 35
+    mutation_rate = 0.25
+    crossover_rate = 0.5
+    maximum_depth = 15
 
-println("Tournament")
-start_time = time_ns()
-tournament_hist, best_tree = run_selection(population_tournament, :tournament,
-                 X, y, generations, maximum_depth, mutation_rate, crossover_rate)
-elapsed = (time_ns() - start_time) / 1e9
-println("Tournament's total time: ", round(elapsed, digits=2), " seconds")
-printBeautifulTree(best_tree)
+    println("Tournament")
+    start_time = time_ns()
+    tournament_hist, best_tree = run_selection(population_tournament, :tournament,
+                    X, y, generations, maximum_depth, mutation_rate, crossover_rate)
+    elapsed = (time_ns() - start_time) / 1e9
+    println("Tournament's total time: ", round(elapsed, digits=2), " seconds")
+    printBeautifulTree(best_tree)
 
 
-println("Roulette")
-start_time = time_ns()
-roulette_hist, best_roulette = run_selection(population_roulette, :roulette,
-                 X, y, generations, maximum_depth, mutation_rate, crossover_rate)
-elapsed = (time_ns() - start_time) / 1e9
-println("Roulette's total time: ", round(elapsed, digits=2), " seconds")
-printBeautifulTree(best_roulette)
+    println("Roulette")
+    start_time = time_ns()
+    roulette_hist, best_roulette = run_selection(population_roulette, :roulette,
+                    X, y, generations, maximum_depth, mutation_rate, crossover_rate)
+    elapsed = (time_ns() - start_time) / 1e9
+    println("Roulette's total time: ", round(elapsed, digits=2), " seconds")
+    printBeautifulTree(best_roulette)   
+
+    p = plot(0:generations, [tournament_hist, roulette_hist], yaxis=:log,
+        title="Symbolic regression",
+        xlabel="Generation",
+        ylabel="Mean Square Error",
+        label=["Tournament Selection" "Roulette Selection"],
+        linewidth=2,
+        legend=:topright)
+
+    display(p)
+
+    tournament_values = Float64[]
+    roulette_values = Float64[]
+    for i in 2:size(X, 1)
+        assignValues!(best_tree.variables, [float(i)])
+        push!(tournament_values, computeTree(best_tree))
+
+        assignValues!(best_roulette.variables, [float(i)])
+        push!(roulette_values, computeTree(best_roulette))
+    end
+
+    p = plot(2:size(X, 1), [y[2:end], tournament_values, roulette_values], #=xaxis=:log,=#
+            title="Symbolic regression",
+            xlabel="Number",
+            ylabel="Value of pi function",
+            label=["Actual value" "Tournament Selection" "Roulette Selection"],
+            linewidth=2,
+            legend=:topright)
+
+    display(p)
+end
+
+main()
