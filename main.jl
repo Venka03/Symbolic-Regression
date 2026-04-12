@@ -1,4 +1,4 @@
-# import Pkg; Pkg.add("Latexify"); Pkg.add("StatsBase"); Pkg.add("CSV"); Pkg.add("DataFrames")  # for first time run
+# import Pkg; Pkg.add("Latexify"); Pkg.add("Plots"); Pkg.add("StatsBase"); Pkg.add("CSV"); Pkg.add("DataFrames")  # for first time run
 using Latexify
 using Random
 using StatsBase: sample
@@ -110,7 +110,7 @@ function performOperation(operation::Operation, operand1::Float64, operand2=noth
         elseif operation.name == "*"
             operand1 * operand2
         elseif operation.name == "/"
-            operand1 == 0 ? throw(DivideError()) : operand1 / operand2
+            operand2 == 0 ? throw(DivideError()) : operand1 / operand2
         end
     else
         # catch error and make fitness be infinity
@@ -179,7 +179,7 @@ end
 
 function generateVariables(num::Int)
     alphabet = "xyznkmuvwabcdefghijpqrtslo"
-    alphabetVector = Vector{}()
+    alphabetVector = Vector{String}()
     for el in alphabet
         push!(alphabetVector, string(el))
     end
@@ -324,6 +324,9 @@ function mutation!(tree::Tree, maximumDepth::Int)
           end
       end
       if randNum >= 2/3
+          if isempty(allNodes)
+              return
+          end
           node = rand(allNodes)
           depthPotential = maximumDepth - getNodeDepth(node, tree)
           minDepth = rand(0:max(0, min(1, depthPotential)))
@@ -349,17 +352,17 @@ function getNodeDepth(target_node::TreeNode, current_head::TreeNode)
     end
 
     if isempty(current_head.children)
-        return Inf # Represents 'not found' in this path
+        return -1 # Represents 'not found' in this path
     end
 
     for child in current_head.children
         child_depth = getNodeDepth(target_node, child)
-        if child_depth != Inf
+        if child_depth != -1
             return 1 + child_depth
         end
     end
 
-    return Inf
+    return -1
 end
 
 function getNodeDepth(node::TreeNode, tree::Tree)
@@ -436,23 +439,84 @@ function roulette_spin(population::Population, wheel::Vector{Float64})
     return population.individuals[idx]
 end
 
+function phenotypic_distance(preds1::Vector{Float64}, preds2::Vector{Float64})
+    return sqrt(sum((preds1 .- preds2).^2))
+end
+
+function apply_fitness_sharing!(population::Population, X::Matrix{Float64},
+                                sigma_share::Float64, alpha::Float64=1.0)
+    N = length(population.individuals)
+    m = zeros(Float64, N)
+
+    for i in 1:N
+        if population.individuals[i].fitness == Inf
+            continue
+        end
+
+        for j in 1:N
+            if population.individuals[j].fitness == Inf
+                continue
+            end
+
+            d_ij = phenotypic_distance(
+                population.individuals[i].predictions,
+                population.individuals[j].predictions
+            )
+
+            # If distance is less than the threshold (sigma_share)
+            if d_ij < sigma_share
+                # sh(d) = 1 - (d / sigma_s)^alpha
+                sh = 1.0 - (d_ij / sigma_share)^alpha
+                m[i] += sh
+            end
+        end
+    end
+
+    for i in 1:N
+        if population.individuals[i].fitness != Inf
+            population.individuals[i].fitness *= m[i]
+        end
+    end
+end
+
+function compute_sigma_share(population::Population)
+    all_preds = [ind.predictions for ind in population.individuals
+                 if ind.fitness != Inf && !isempty(ind.predictions)]
+    if isempty(all_preds)
+        return 1.0
+    end
+    distances = [phenotypic_distance(all_preds[i], all_preds[j])
+                 for i in 1:length(all_preds) for j in i+1:length(all_preds)]
+    return isempty(distances) ? 1.0 : median(distances) * 0.5
+end
+
 function run_selection(population::Population, selection_method::Symbol,
  X::Matrix{Float64}, y::Vector{Float64}, generations::Int, maximumDepth::Int,
- mutation_rate::Float64=0.25, crossover_rate::Float64=0.5)
+ mutation_rate::Float64=0.25, crossover_rate::Float64=0.5, elite_count::Int = 3)
+
     best_fitness_hist = Float64[]
 
     # Initial fitness calculation
     computePopulationFitness!(population, X, y)
 
     for i in 0:generations
-        # Save the absolute best before any changes
-        best_ind = deepcopy(best(population))
+
+        # 1. EXTRACT ELITES (Using Raw Fitness)
+        sorted = sort(population.individuals, by = x -> x.fitness)
+        elites = [deepcopy(ind) for ind in sorted[1:elite_count]]
+
+        best_ind = deepcopy(elites[1])
         current_fitness = best_ind.fitness
+
         push!(best_fitness_hist, current_fitness)
         println("Generation $i. Best Fitness: $current_fitness")
 
-        new_individuals = Vector{Tree}()
+        # 2. APPLY FITNESS SHARING (Penalizes the .fitness values)
+        sigma_share = compute_sigma_share(population)
+        apply_fitness_sharing!(population, X, sigma_share, 1.0)
 
+
+        # 3. SETUP SELECTION (Using the new Penalized Fitness)
         if selection_method == :roulette
             wheel = build_wheel(population)
             select = () -> roulette_spin(population, wheel)
@@ -462,7 +526,11 @@ function run_selection(population::Population, selection_method::Symbol,
             throw(ArgumentError("Unknown selection method: $selection_method"))
         end
 
-        while length(new_individuals) < population.size
+
+        # 4. GENERATE NEW POPULATION
+        new_individuals = Vector{Tree}()
+
+        while length(new_individuals) < population.size - elite_count
             randNum = rand()
             if randNum < crossover_rate
                 # Crossover
@@ -475,7 +543,7 @@ function run_selection(population::Population, selection_method::Symbol,
 
                 push!(new_individuals, child1)
                 # Only push another if we have not exceeded population size
-                if length(new_individuals) < population.size 
+                if length(new_individuals) < population.size - elite_count
                     push!(new_individuals, child2)
                 end
             elseif randNum < crossover_rate + mutation_rate
@@ -493,10 +561,10 @@ function run_selection(population::Population, selection_method::Symbol,
         end
 
         # Re-evaluate New Generation
-        population.individuals = new_individuals
+        # Elites go in unconditionally
+        population.individuals = [elites; new_individuals]
         computePopulationFitness!(population, X, y)
     end
-
     return (best_fitness_hist, best(population))
 end
 
@@ -510,7 +578,7 @@ function main()
     generations = 35
     mutation_rate = 0.25
     crossover_rate = 0.5
-    maximum_depth = 15
+    maximum_depth = 8
 
     println("Tournament")
     start_time = time_ns()
@@ -527,36 +595,38 @@ function main()
                     X, y, generations, maximum_depth, mutation_rate, crossover_rate)
     elapsed = (time_ns() - start_time) / 1e9
     println("Roulette's total time: ", round(elapsed, digits=2), " seconds")
-    printBeautifulTree(best_roulette)   
+    printBeautifulTree(best_roulette)
 
     p = plot(0:generations, [tournament_hist, roulette_hist], yaxis=:log,
         title="Symbolic regression",
         xlabel="Generation",
-        ylabel="Mean Square Error",
+        ylabel="Mean Absolute Error",
         label=["Tournament Selection" "Roulette Selection"],
         linewidth=2,
         legend=:topright)
 
+    savefig(p, "fitness_evolution.png")
     display(p)
 
     tournament_values = Float64[]
     roulette_values = Float64[]
-    for i in 2:size(X, 1)
-        assignValues!(best_tree.variables, [float(i)])
+    for i in 1:axes(X, 1)
+        assignValues!(best_tree.variables, X[i, :])
         push!(tournament_values, computeTree(best_tree))
 
-        assignValues!(best_roulette.variables, [float(i)])
+        assignValues!(best_roulette.variables, X[i, :])
         push!(roulette_values, computeTree(best_roulette))
     end
 
-    p = plot(2:size(X, 1), [y[2:end], tournament_values, roulette_values], #=xaxis=:log,=#
-            title="Symbolic regression",
-            xlabel="Number",
-            ylabel="Value of pi function",
-            label=["Actual value" "Tournament Selection" "Roulette Selection"],
-            linewidth=2,
-            legend=:topright)
+    p = plot(1:size(X, 1), [y[2:end], tournament_values, roulette_values], #=xaxis=:log,=#
+        title="Symbolic regression",
+        xlabel="Number",
+        ylabel="Value of pi function",
+        label=["Actual value" "Tournament Selection" "Roulette Selection"],
+        linewidth=2,
+        legend=:topright)
 
+    savefig(p, "pi_approximation.png")
     display(p)
 end
 
