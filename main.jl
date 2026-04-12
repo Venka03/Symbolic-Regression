@@ -246,7 +246,7 @@ function computeFitness!(tree::Tree, X::Matrix{Float64}, y::Vector{Float64})
     catch e
         fitness = Inf
     end
-    tree.fitness = fitness
+    tree.fitness = fitness / num_rows
 end
 
 function Population(size::Int, numVariables::Int)
@@ -429,8 +429,8 @@ end
 
 function build_wheel(population::Population)
     fitnesses = [ind.fitness for ind in population.individuals]
-    inverted  = 1.0 ./ (fitnesses .+ 1e-6)
-    probs     = inverted ./ sum(inverted)
+    inverted = 1.0 ./ (fitnesses .+ 1e-6)
+    probs = inverted ./ sum(inverted)
     return cumsum(probs)
 end
 
@@ -443,8 +443,7 @@ function phenotypic_distance(preds1::Vector{Float64}, preds2::Vector{Float64})
     return sqrt(sum((preds1 .- preds2).^2))
 end
 
-function apply_fitness_sharing!(population::Population, X::Matrix{Float64},
-                                sigma_share::Float64, alpha::Float64=1.0)
+function apply_fitness_sharing!(population::Population, sigma_share::Float64, alpha::Float64=1.0)
     N = length(population.individuals)
     m = zeros(Float64, N)
 
@@ -490,9 +489,9 @@ function compute_sigma_share(population::Population)
     return isempty(distances) ? 1.0 : median(distances) * 0.5
 end
 
-function run_selection(population::Population, selection_method::Symbol,
- X::Matrix{Float64}, y::Vector{Float64}, generations::Int, maximumDepth::Int,
- mutation_rate::Float64=0.25, crossover_rate::Float64=0.5, elite_count::Int = 3)
+function run_selection(population::Population, selection_method::Symbol, printable::Bool, niche::Bool,
+    X::Matrix{Float64}, y::Vector{Float64}, generations::Int, maximumDepth::Int,
+    mutation_rate::Float64, crossover_rate::Float64, elite_count::Int)
 
     best_fitness_hist = Float64[]
 
@@ -509,11 +508,15 @@ function run_selection(population::Population, selection_method::Symbol,
         current_fitness = best_ind.fitness
 
         push!(best_fitness_hist, current_fitness)
-        println("Generation $i. Best Fitness: $current_fitness")
+        if printable
+            println("Generation $i. Best Fitness: $current_fitness")
+        end
 
-        # 2. APPLY FITNESS SHARING (Penalizes the .fitness values)
-        sigma_share = compute_sigma_share(population)
-        apply_fitness_sharing!(population, X, sigma_share, 1.0)
+        if niche
+            # 2. APPLY FITNESS SHARING (Penalizes the .fitness values)
+            sigma_share = compute_sigma_share(population)
+            apply_fitness_sharing!(population, sigma_share, 1.0)
+        end
 
 
         # 3. SETUP SELECTION (Using the new Penalized Fitness)
@@ -568,66 +571,185 @@ function run_selection(population::Population, selection_method::Symbol,
     return (best_fitness_hist, best(population))
 end
 
-function main()
-    X, y = prepare_data("pi.csv")
+function runSymbolicRegression(population::Population, X::Matrix{Float64}, y::Vector{Float64}, selection_method::Symbol, printable::Bool, niche::Bool, generations::Int,
+    maximum_depth::Int, mutation_rate::Float64=0.25, crossover_rate::Float64=0.5, elite_count::Int = 3)
 
+    name = niche ? "Niche " : ""
+    if selection_method == :roulette
+        name *= "Roulette"
+    elseif selection_method == :tournament
+        name *= "Tournament"
+    else
+        throw(ArgumentError("Unknown selection method: $selection_method"))
+    end
+    if printable
+        println(name)
+    end
+    start_time = time_ns()
+    history, best_tree = run_selection(population, selection_method, printable, niche,
+                X, y, generations, maximum_depth, mutation_rate, crossover_rate, elite_count)
+    elapsed = (time_ns() - start_time) / 1e9
+    if printable
+        println(name * "'s total time: ", round(elapsed, digits=2), " seconds")
+        printBeautifulTree(best_tree)
+        println("Heigh of tree:", getNodeHeight(best_tree.head))
+    end
+    return (history, best_tree, elapsed)
+end
+
+function doIterations(fileName, generations, populationSize, iterations, printable)
+    X, y = prepare_data(fileName)
     individual_size = size(X, 2)
-    population_roulette = Population(150, individual_size)
-    population_tournament = deepcopy(population_roulette)  # to have the same initial population
-
-    generations = 35
     mutation_rate = 0.25
     crossover_rate = 0.5
     maximum_depth = 8
+    elite_count = 3
 
-    println("Tournament")
-    start_time = time_ns()
-    tournament_hist, best_tree = run_selection(population_tournament, :tournament,
-                    X, y, generations, maximum_depth, mutation_rate, crossover_rate)
-    elapsed = (time_ns() - start_time) / 1e9
-    println("Tournament's total time: ", round(elapsed, digits=2), " seconds")
-    printBeautifulTree(best_tree)
+    absoluteBest = nothing
+    fitness_hist_tournament = zeros(generations+1)
+    fitness_hist_roulette = zeros(generations+1)
+    fitness_hist_tournament_niche = zeros(generations+1)
+    fitness_hist_roulette_niche = zeros(generations+1)
 
+    avg_tournament_time = 0
+    avg_roulette_time = 0
+    avg_tournament_niche_time = 0
+    avg_roulette_niche_time = 0
 
-    println("Roulette")
-    start_time = time_ns()
-    roulette_hist, best_roulette = run_selection(population_roulette, :roulette,
-                    X, y, generations, maximum_depth, mutation_rate, crossover_rate)
-    elapsed = (time_ns() - start_time) / 1e9
-    println("Roulette's total time: ", round(elapsed, digits=2), " seconds")
-    printBeautifulTree(best_roulette)
+    for i in 1:iterations
+        println("Iteration $i")
+        population_roulette = Population(populationSize, individual_size)
+        population_tournament = deepcopy(population_roulette)  # to have the same initial population
+        population_tournament_niche = deepcopy(population_roulette)
+        population_roulette_niche = deepcopy(population_roulette)
+        
+        tournament_hist, best_tournament_tree, tournament_time = runSymbolicRegression(population_tournament, X, y, :tournament, printable, false,
+                                 generations, maximum_depth, mutation_rate, crossover_rate, elite_count)
+        fitness_hist_tournament += tournament_hist
+        avg_tournament_time += tournament_time
+        
+        roulette_hist, best_roulette_tree, roulette_time = runSymbolicRegression(population_roulette, X, y, :roulette, printable, false,
+                                 generations, maximum_depth, mutation_rate, crossover_rate, elite_count)
+        fitness_hist_roulette += roulette_hist
+        avg_roulette_time += roulette_time
 
-    p = plot(0:generations, [tournament_hist, roulette_hist], yaxis=:log,
-        title="Symbolic regression",
-        xlabel="Generation",
-        ylabel="Mean Absolute Error",
-        label=["Tournament Selection" "Roulette Selection"],
-        linewidth=2,
-        legend=:topright)
+        tournament_niche_hist, best_tournament_niche_tree, tournament_niche_time = 
+                            runSymbolicRegression(population_tournament_niche, X, y, :tournament, printable, true,
+                                 generations, maximum_depth, mutation_rate, crossover_rate, elite_count)
+        fitness_hist_tournament_niche += tournament_niche_hist
+        avg_tournament_niche_time += tournament_niche_time
+        roulette_niche_hist, best_roulette_niche_tree, roulette_niche_time = 
+                            runSymbolicRegression(population_roulette_niche, X, y, :roulette, printable, true,
+                                 generations, maximum_depth, mutation_rate, crossover_rate, elite_count)                         
+        fitness_hist_roulette_niche += roulette_niche_hist
+        avg_roulette_niche_time += roulette_niche_time
 
-    savefig(p, "fitness_evolution.png")
-    display(p)
+        theBest = min(best_tournament_tree, best_roulette_tree, best_tournament_niche_tree, best_roulette_niche_tree)
+        if !isnothing(absoluteBest)
+            if theBest < absoluteBest
+                absoluteBest = deepcopy(theBest)
+            end
+        else
+            absoluteBest = deepcopy(theBest)
+        end
 
-    tournament_values = Float64[]
-    roulette_values = Float64[]
-    for i in 1:axes(X, 1)
-        assignValues!(best_tree.variables, X[i, :])
-        push!(tournament_values, computeTree(best_tree))
+        if printable
+            p = plot(0:generations, [tournament_hist, roulette_hist, tournament_niche_hist, roulette_niche_hist], yaxis=:log,
+                title="Error history",
+                xlabel="Generation",
+                ylabel="Mean Absolute Error",
+                label=["Tournament Selection" "Roulette Selection" "Niche Tournament Selection" "Niche Roulette Selection"],
+                linewidth=2,
+                legend=:bottomleft)
 
-        assignValues!(best_roulette.variables, X[i, :])
-        push!(roulette_values, computeTree(best_roulette))
+            savefig(p, fileName*"_fitness_evolution_$i.png")
+            display(p)
+
+            tournament_values = Float64[]
+            roulette_values = Float64[]
+            tournament_niche_values = Float64[]
+            roulette_niche_values = Float64[]
+            for j in 1:size(X, 1)
+                assignValues!(best_tournament_tree.variables, X[j, :])
+                push!(tournament_values, computeTree(best_tournament_tree))
+
+                assignValues!(best_roulette_tree.variables, X[j, :])
+                push!(roulette_values, computeTree(best_roulette_tree))
+
+                assignValues!(best_tournament_niche_tree.variables, X[j, :])
+                push!(tournament_niche_values, computeTree(best_tournament_niche_tree))
+
+                assignValues!(best_roulette_niche_tree.variables, X[j, :])
+                push!(roulette_niche_values, computeTree(best_roulette_niche_tree))
+            end
+
+            p = plot(1:size(X, 1), [y, tournament_values, roulette_values, tournament_niche_values, roulette_niche_values], #=xaxis=:log,=#
+                title="Selection comparison",
+                xlabel="Number",
+                ylabel="Value of function",
+                label=["Actual value" "Tournament Selection" "Roulette Selection" "Niche Tournament Selection" "Niche Roulette Selection"],
+                linewidth=2,
+                legend=:topleft)
+
+            savefig(p, fileName*"_approximation_$i.png")
+            display(p)
+        end
     end
 
-    p = plot(1:size(X, 1), [y[2:end], tournament_values, roulette_values], #=xaxis=:log,=#
-        title="Symbolic regression",
-        xlabel="Number",
-        ylabel="Value of pi function",
-        label=["Actual value" "Tournament Selection" "Roulette Selection"],
-        linewidth=2,
-        legend=:topright)
+    fitness_hist_tournament /= iterations
+    fitness_hist_roulette /= iterations
+    fitness_hist_tournament_niche /= iterations
+    fitness_hist_roulette_niche /= iterations
 
-    savefig(p, "pi_approximation.png")
+    avg_tournament_time /= iterations
+    avg_roulette_time /= iterations
+    avg_tournament_niche_time /= iterations
+    avg_roulette_niche_time /= iterations
+
+    println("The Best Solution:")
+    printBeautifulTree(absoluteBest)
+    computeFitness!(absoluteBest, X, y)
+    println("It's fitness: $(absoluteBest.fitness)")
+
+    println("Average Tournament time: $avg_tournament_time")
+    println("Average Roulette time: $avg_roulette_time")
+    println("Average Niche Tournament time: $avg_tournament_niche_time")
+    println("Average Niche Roulette time: $avg_roulette_niche_time")
+
+    best_tree_values = Float64[]
+    for i in 1:size(X, 1)
+        assignValues!(absoluteBest.variables, X[i, :])
+        push!(best_tree_values, computeTree(absoluteBest))
+    end
+
+    p = plot(1:size(X, 1), [y, best_tree_values], #=xaxis=:log,=#
+        title="The Best Approximation comparison",
+        xlabel="Number",
+        ylabel="Value of function",
+        label=["Actual value" "The Best Approximation"],
+        linewidth=2,
+        legend=:topleft)
+
+    savefig(p, fileName*"_best_approximation.png")
     display(p)
+
+    p = plot(0:generations, [fitness_hist_tournament, fitness_hist_roulette, fitness_hist_tournament_niche, fitness_hist_roulette_niche], yaxis=:log,
+        title="Comparison",
+        xlabel="Generation",
+        ylabel="Average MAE after $iterations iterations",
+        label=["Tournament Selection" "Roulette Selection" "Niche Tournament Selection" "Niche Roulette Selection"],
+        linewidth=2,
+        legend=:bottomleft)
+
+    savefig(p, fileName*"_average_fitness_evolution.png")
+    display(p)
+end
+
+function main()
+    start_time = time_ns()
+    doIterations("pi.csv", 35, 150, 10, false)
+    elapsed = (time_ns() - start_time) / 1e9
+    println("Total execution time: ", round(elapsed, digits=2), " seconds")
 end
 
 main()
